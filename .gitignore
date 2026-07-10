@@ -4,3 +4,5 @@ logs/
 log/
 src/bxi_rl_controller_ros2_example_bak/
 .*/
+__pycache__/
+*.pyc
