@@ -6,6 +6,8 @@ from elf3_arm_ik_baselink.math_utils import (
     exponential_smooth,
     quaternion_xyzw_to_matrix,
     rate_limit,
+    rotation_error_rad,
+    rotation_matrix_to_vector,
 )
 
 
@@ -43,3 +45,19 @@ def test_exponential_smooth():
         0.25,
     )
     np.testing.assert_allclose(actual, [0.25, 1.5])
+
+
+def test_rotation_error_rad():
+    half = math.sqrt(0.5)
+    rotation = quaternion_xyzw_to_matrix([0.0, 0.0, half, half])
+    assert math.isclose(rotation_error_rad(np.eye(3), rotation), math.pi / 2.0)
+
+
+def test_rotation_matrix_to_vector():
+    half = math.sqrt(0.5)
+    rotation = quaternion_xyzw_to_matrix([0.0, 0.0, half, half])
+    np.testing.assert_allclose(
+        rotation_matrix_to_vector(rotation),
+        [0.0, 0.0, math.pi / 2.0],
+        atol=1e-9,
+    )

@@ -13,7 +13,6 @@ def _patched_robot_description(context):
     mesh_dir = urdf_file.parent / 'meshes'
     text = text.replace('./meshes/', f'file://{mesh_dir}/')
 
-    package_share = FindPackageShare('elf3_arm_ik_baselink')
     config_file = LaunchConfiguration('config_file')
     urdf_dir = LaunchConfiguration('urdf_dir')
     rviz_config = LaunchConfiguration('rviz_config')

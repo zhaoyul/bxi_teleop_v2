@@ -40,6 +40,10 @@ setup(
                 os.path.join(repo_data_dir, 'elf3_arm_r.urdf'),
             ],
         ),
+        (
+            'share/' + package_name + '/tools',
+            glob(os.path.join('tools', '*.py')),
+        ),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -49,7 +53,7 @@ setup(
     license='TODO: License declaration',
     extras_require={'test': ['pytest']},
     entry_points={
-            'console_scripts': [
+        'console_scripts': [
             (
                 'baselink_arm_ik_node = '
                 'elf3_arm_ik_baselink.baselink_arm_ik_node:main'

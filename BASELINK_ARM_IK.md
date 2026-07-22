@@ -21,6 +21,15 @@ pico/left_grip               std_msgs/Float32
 pico/right_grip              std_msgs/Float32
 ```
 
+结构化求解状态：
+
+```text
+arm_ik/status  std_msgs/String (JSON)
+```
+
+状态包含成功标志、失败原因、位置误差、姿态误差、纯 IK 耗时、校验耗时、
+雅可比条件数和关节限位裕量。失败结果不会覆盖上一条已验证的关节命令。
+
 `pico/left_grip` 和 `pico/right_grip` 会发布 `1.0`，用于触发现有 `TeleopState` 接管手臂关节。
 
 ## 启动
@@ -61,6 +70,25 @@ ros2 launch elf3_arm_ik_baselink baselink_arm_ik_rviz.launch.py
 ```
 
 另开终端发布目标点，RViz 中可看到手臂姿态变化。
+
+## 验证
+
+可复现的精度与耗时基准：
+
+```bash
+python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/benchmark_ik.py \
+  --iterations 20
+```
+
+需要先启动 IK 节点的 ROS2 端到端冒烟测试：
+
+```bash
+python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/ros_ik_smoke_test.py
+```
+
+2026-07-22 Ubuntu VM 基准结果：连续跟踪 80 个样本，P95 `7.883ms`，
+最大 `10.332ms`，低于 20ms 的比例为 `100%`。较难姿态从零初值冷启动仍有
+`32.935ms`，因此当前 20ms 结论只适用于以当前关节状态为初值的连续控制场景。
 
 ### 复位与握手起手式
 
@@ -112,7 +140,10 @@ IK_DELIVERY_TODO.md
 已完成：
 
 - 基于 ELF3 URDF 的双臂 6D TCP IK 节点。
-- 基于 `base_link` 的左右手目标输入接口。
+- 基于 `base_link` 的左右手目标输入接口，包含左右肩相对基座的安装偏移。
+- FK 回算校验位置/姿态误差、关节限位裕量和近奇异状态。
+- 不可达、近奇异、贴近关节限位或非有限输入会被拒绝并保持上一安全命令。
+- 发布真实 IK 耗时和结构化求解状态。
 - 输出 `pico_control_joint_commands`，可对接现有手臂命令链。
 - 回零服务 `/arm_ik/go_home`。
 - 握手起手式服务 `/arm_ik/go_handshake_ready`：左臂回零，右臂伸出。
@@ -124,11 +155,12 @@ IK_DELIVERY_TODO.md
 
 - 接入 `withoutarm.onnx` state：身体、腿、腰由模型控制，手臂由本 IK 节点覆盖。
 - 在真实控制链路中确认最终关节命令合并点。
-- 将当前 demo 层的服务返回耗时细分为纯 IK 求解耗时、轨迹生成耗时和控制链路延迟。
+- 把结构化 IK 状态接入最终自定义 Service / Action 接口和 RViz 面板。
 
 ## 当前保护
 
 - 目标必须在配置工作空间内。
+- IK 结果必须通过 FK 误差、关节限位裕量和雅可比条件数校验。
 - 左右 TCP 目标距离过近时保持上一帧命令。
 - 每周期关节变化有限幅。
 - 关节命令做一阶低通平滑。

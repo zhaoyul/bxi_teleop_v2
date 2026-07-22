@@ -59,3 +59,38 @@ def exponential_smooth(previous: np.ndarray, target: np.ndarray, alpha: float) -
         target,
         dtype=float,
     )
+
+
+def rotation_error_rad(target: np.ndarray, actual: np.ndarray) -> float:
+    """Return the shortest angular distance between two rotation matrices."""
+    delta = np.asarray(target, dtype=float).reshape(3, 3).T @ np.asarray(
+        actual,
+        dtype=float,
+    ).reshape(3, 3)
+    cosine = float(np.clip((np.trace(delta) - 1.0) * 0.5, -1.0, 1.0))
+    return math.acos(cosine)
+
+
+def rotation_matrix_to_vector(matrix: np.ndarray) -> np.ndarray:
+    """Convert a rotation matrix to a rotation vector with stable small angles."""
+    rotation = np.asarray(matrix, dtype=float).reshape(3, 3)
+    angle = rotation_error_rad(np.eye(3, dtype=float), rotation)
+    skew = np.array(
+        [
+            rotation[2, 1] - rotation[1, 2],
+            rotation[0, 2] - rotation[2, 0],
+            rotation[1, 0] - rotation[0, 1],
+        ],
+        dtype=float,
+    )
+    if angle <= 1e-8:
+        return 0.5 * skew
+
+    sine = math.sin(angle)
+    if abs(sine) <= 1e-8:
+        eigenvalues, eigenvectors = np.linalg.eig(rotation)
+        index = int(np.argmin(np.abs(eigenvalues - 1.0)))
+        axis = np.real(eigenvectors[:, index])
+        norm = float(np.linalg.norm(axis))
+        return angle * axis / norm if norm > 1e-12 else np.zeros(3)
+    return angle * skew / (2.0 * sine)

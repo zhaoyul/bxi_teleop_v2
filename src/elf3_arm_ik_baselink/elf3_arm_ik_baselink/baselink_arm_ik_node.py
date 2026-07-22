@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import threading
 import time
@@ -19,7 +20,7 @@ import std_msgs.msg
 import std_srvs.srv
 
 from .constants import JOINT_NAMES, LEFT_HOME, RIGHT_HOME, SIDE_LEFT, SIDE_RIGHT
-from .ik_solver import Elf3ArmIkSolver
+from .ik_solver import Elf3ArmIkSolver, IkResult
 from .math_utils import exponential_smooth, quaternion_xyzw_to_matrix, rate_limit
 
 
@@ -49,7 +50,15 @@ class BaseLinkArmIkNode(Node):
         self._declare_parameters()
         self._load_parameters()
 
-        self.solver = Elf3ArmIkSolver(self.urdf_dir)
+        self.solver = Elf3ArmIkSolver(
+            self.urdf_dir,
+            max_position_error_m=self.max_position_error_m,
+            max_orientation_error_rad=np.deg2rad(self.max_orientation_error_deg),
+            max_jacobian_condition=self.max_jacobian_condition,
+            min_joint_limit_margin_rad=self.min_joint_limit_margin_rad,
+            left_shoulder_origin=self.left_shoulder_origin,
+            right_shoulder_origin=self.right_shoulder_origin,
+        )
         self._lock = threading.Lock()
         self.targets: dict[str, Optional[TargetPose]] = {
             SIDE_LEFT: None,
@@ -94,6 +103,11 @@ class BaseLinkArmIkNode(Node):
             sensor_msgs.msg.JointState,
             self.joint_command_topic,
             qos,
+        )
+        self.status_pub = self.create_publisher(
+            std_msgs.msg.String,
+            self.ik_status_topic,
+            10,
         )
         self.left_enable_pub = self.create_publisher(
             std_msgs.msg.Float32,
@@ -145,9 +159,16 @@ class BaseLinkArmIkNode(Node):
         self.declare_parameter('max_joint_step_rad', 0.08)
         self.declare_parameter('solve_orientation', True)
         self.declare_parameter('tcp_offset', [0.08, 0.0, 0.0])
+        self.declare_parameter('left_shoulder_origin', [0.0, 0.178, 0.087])
+        self.declare_parameter('right_shoulder_origin', [0.0, -0.178, 0.087])
         self.declare_parameter('workspace_min', [-0.25, -0.85, -0.25])
         self.declare_parameter('workspace_max', [0.75, 0.85, 0.95])
         self.declare_parameter('min_lr_tcp_distance', 0.12)
+        self.declare_parameter('max_position_error_m', 0.002)
+        self.declare_parameter('max_orientation_error_deg', 2.0)
+        self.declare_parameter('max_jacobian_condition', 1000.0)
+        self.declare_parameter('min_joint_limit_margin_rad', 0.005)
+        self.declare_parameter('ik_status_topic', 'arm_ik/status')
         self.declare_parameter('publish_enable_grip', True)
         self.declare_parameter('go_home_service', 'arm_ik/go_home')
         self.declare_parameter(
@@ -196,9 +217,28 @@ class BaseLinkArmIkNode(Node):
         self.max_joint_step_rad = self._positive_float('max_joint_step_rad')
         self.solve_orientation = bool(self.get_parameter('solve_orientation').value)
         self.tcp_offset = self._float_array_parameter('tcp_offset', 3)
+        self.left_shoulder_origin = self._float_array_parameter(
+            'left_shoulder_origin',
+            3,
+        )
+        self.right_shoulder_origin = self._float_array_parameter(
+            'right_shoulder_origin',
+            3,
+        )
         self.workspace_min = self._float_array_parameter('workspace_min', 3)
         self.workspace_max = self._float_array_parameter('workspace_max', 3)
         self.min_lr_tcp_distance = self._positive_float('min_lr_tcp_distance')
+        self.max_position_error_m = self._positive_float('max_position_error_m')
+        self.max_orientation_error_deg = self._positive_float(
+            'max_orientation_error_deg'
+        )
+        self.max_jacobian_condition = self._positive_float(
+            'max_jacobian_condition'
+        )
+        self.min_joint_limit_margin_rad = self._positive_float(
+            'min_joint_limit_margin_rad'
+        )
+        self.ik_status_topic = str(self.get_parameter('ik_status_topic').value)
         self.publish_enable_grip = bool(
             self.get_parameter('publish_enable_grip').value
         )
@@ -356,7 +396,11 @@ class BaseLinkArmIkNode(Node):
                 tcp_offset=self.tcp_offset,
             )
             if not result.success:
-                self.get_logger().warn(f'{side} IK fallback: {result.message}')
+                self.get_logger().warn(
+                    f'{side} IK rejected [{result.status}]: {result.message}'
+                )
+                self._publish_ik_status(side, result)
+                continue
 
             limited = rate_limit(previous[side], result.joints, self.max_joint_step_rad)
             solved[side] = exponential_smooth(
@@ -364,6 +408,7 @@ class BaseLinkArmIkNode(Node):
                 limited,
                 self.smoothing_alpha,
             )
+            self._publish_ik_status(side, result)
 
         if not self._passes_dual_arm_guard(targets, now):
             solved = previous
@@ -535,6 +580,33 @@ class BaseLinkArmIkNode(Node):
         enable.data = 1.0
         self.left_enable_pub.publish(enable)
         self.right_enable_pub.publish(enable)
+
+    def _publish_ik_status(self, side: str, result: IkResult) -> None:
+        def finite_or_none(value: float) -> Optional[float]:
+            return float(value) if np.isfinite(value) else None
+
+        msg = std_msgs.msg.String()
+        msg.data = json.dumps(
+            {
+                'side': side,
+                'success': result.success,
+                'status': result.status,
+                'position_error_m': finite_or_none(result.position_error_m),
+                'orientation_error_deg': finite_or_none(
+                    np.rad2deg(result.orientation_error_rad),
+                ),
+                'solve_time_ms': finite_or_none(result.solve_time_ms),
+                'validation_time_ms': finite_or_none(result.validation_time_ms),
+                'jacobian_condition': finite_or_none(result.jacobian_condition),
+                'min_joint_limit_margin_rad': finite_or_none(
+                    result.min_joint_limit_margin_rad,
+                ),
+                'message': result.message,
+            },
+            allow_nan=False,
+            separators=(',', ':'),
+        )
+        self.status_pub.publish(msg)
 
 
 def main(args: Optional[list[str]] = None) -> None:
