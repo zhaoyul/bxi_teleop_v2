@@ -103,6 +103,12 @@ ros2 run elf3_arm_ik_baselink demo_reset_scenarios --once
 
 ## 当前进展
 
+正式交付差距和逐项关闭计划维护在：
+
+```text
+IK_DELIVERY_TODO.md
+```
+
 已完成：
 
 - 基于 ELF3 URDF 的双臂 6D TCP IK 节点。
@@ -112,6 +118,7 @@ ros2 run elf3_arm_ik_baselink demo_reset_scenarios --once
 - 握手起手式服务 `/arm_ik/go_handshake_ready`：左臂回零，右臂伸出。
 - 大幅演示姿态服务 `/arm_ik/go_demo_pose_a`、`/arm_ik/go_demo_pose_b`。
 - RViz 展示、机器人模型、同步字幕、循环演示和耗时显示。
+- 基准 ELF3 模型配置：`src/elf3_arm_ik_baselink/config/models/elf3.yaml`。
 
 待真实联调：
 

@@ -26,6 +26,10 @@ setup(
             glob(os.path.join('config', '*.rviz')),
         ),
         (
+            'share/' + package_name + '/config/models',
+            glob(os.path.join('config', 'models', '*.yaml')),
+        ),
+        (
             'share/' + package_name + '/launch',
             glob(os.path.join('launch', '*.launch.py')),
         ),
