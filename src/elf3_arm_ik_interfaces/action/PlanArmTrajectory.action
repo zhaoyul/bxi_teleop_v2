@@ -1,0 +1,33 @@
+# Solve a 6D target and generate a constrained joint trajectory.
+string robot_model
+string arm_side
+sensor_msgs/JointState current_joint_state
+geometry_msgs/PoseStamped target_pose
+bool use_tcp_offset
+geometry_msgs/Vector3 tcp_offset
+float64 max_velocity_rad_s
+float64 max_acceleration_rad_s2
+float64 control_period_sec
+float64 minimum_duration_sec
+bool require_collision_check
+bool execute
+bool return_to_safe_on_cancel
+# Supported values: "home" and "handshake_ready".
+string safe_return_mode
+---
+bool success
+string status
+string message
+trajectory_msgs/JointTrajectory trajectory
+float64 position_error_m
+float64 orientation_error_rad
+float64 solve_time_ms
+float64 planning_time_ms
+bool collision_checked
+bool collision
+string[] collision_pairs
+---
+float32 progress
+string phase
+sensor_msgs/JointState current_command
+float64 elapsed_ms

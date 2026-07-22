@@ -95,6 +95,10 @@ class Elf3ArmIkSolver:
         tcp_orientation: Optional[np.ndarray],
         seed_joints: Optional[np.ndarray],
         tcp_offset: np.ndarray,
+        max_position_error_m: Optional[float] = None,
+        max_orientation_error_rad: Optional[float] = None,
+        max_jacobian_condition: Optional[float] = None,
+        min_joint_limit_margin_rad: Optional[float] = None,
     ) -> IkResult:
         """Return a 7-joint command for one arm.
 
@@ -102,6 +106,22 @@ class Elf3ArmIkSolver:
         chain target is moved back from TCP to wrist origin before IK.
         """
         chain = self._chain(side)
+        position_tolerance = self._positive_or_default(
+            max_position_error_m,
+            self.max_position_error_m,
+        )
+        orientation_tolerance = self._positive_or_default(
+            max_orientation_error_rad,
+            self.max_orientation_error_rad,
+        )
+        condition_limit = self._positive_or_default(
+            max_jacobian_condition,
+            self.max_jacobian_condition,
+        )
+        joint_margin_limit = self._positive_or_default(
+            min_joint_limit_margin_rad,
+            self.min_joint_limit_margin_rad,
+        )
         tcp_position = np.asarray(tcp_position, dtype=float).reshape(3)
         orientation = (
             np.asarray(tcp_orientation, dtype=float).reshape(3, 3)
@@ -175,32 +195,32 @@ class Elf3ArmIkSolver:
 
         status = STATUS_SUCCESS
         message = ''
-        if position_error_m > self.max_position_error_m:
+        if position_error_m > position_tolerance:
             status = STATUS_POSITION_ERROR
             message = (
                 f'position error {position_error_m:.6f} m exceeds '
-                f'{self.max_position_error_m:.6f} m'
+                f'{position_tolerance:.6f} m'
             )
         elif (
             tcp_orientation is not None
-            and orientation_error > self.max_orientation_error_rad
+            and orientation_error > orientation_tolerance
         ):
             status = STATUS_ORIENTATION_ERROR
             message = (
                 f'orientation error {np.rad2deg(orientation_error):.3f} deg exceeds '
-                f'{np.rad2deg(self.max_orientation_error_rad):.3f} deg'
+                f'{np.rad2deg(orientation_tolerance):.3f} deg'
             )
-        elif min_margin < self.min_joint_limit_margin_rad:
+        elif min_margin < joint_margin_limit:
             status = STATUS_JOINT_LIMIT
             message = (
                 f'joint limit margin {min_margin:.6f} rad is below '
-                f'{self.min_joint_limit_margin_rad:.6f} rad'
+                f'{joint_margin_limit:.6f} rad'
             )
-        elif jacobian_condition > self.max_jacobian_condition:
+        elif jacobian_condition > condition_limit:
             status = STATUS_NEAR_SINGULAR
             message = (
                 f'Jacobian condition {jacobian_condition:.1f} exceeds '
-                f'{self.max_jacobian_condition:.1f}'
+                f'{condition_limit:.1f}'
             )
 
         return IkResult(
@@ -293,6 +313,12 @@ class Elf3ArmIkSolver:
     ) -> np.ndarray:
         selected = default if value is None else value
         return np.asarray(selected, dtype=float).reshape(3)
+
+    @staticmethod
+    def _positive_or_default(value: Optional[float], default: float) -> float:
+        if value is None or float(value) <= 0.0:
+            return float(default)
+        return float(value)
 
     @staticmethod
     def _initial_position(chain, seed_joints: Optional[np.ndarray]) -> np.ndarray:

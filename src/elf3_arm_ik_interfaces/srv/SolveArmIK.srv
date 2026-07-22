@@ -1,0 +1,35 @@
+# Empty robot_model selects the node's configured model.
+string robot_model
+string arm_side
+sensor_msgs/JointState current_joint_state
+geometry_msgs/PoseStamped target_pose
+bool use_tcp_offset
+geometry_msgs/Vector3 tcp_offset
+# Non-positive values select node defaults.
+float64 max_position_error_m
+float64 max_orientation_error_rad
+float64 max_jacobian_condition
+float64 min_joint_limit_margin_rad
+bool require_collision_check
+---
+uint8 STATUS_SUCCESS=0
+uint8 STATUS_INVALID_REQUEST=1
+uint8 STATUS_UNSUPPORTED_MODEL=2
+uint8 STATUS_INVALID_FRAME=3
+uint8 STATUS_OUTSIDE_WORKSPACE=4
+uint8 STATUS_IK_REJECTED=5
+uint8 STATUS_COLLISION_CHECK_UNAVAILABLE=6
+bool success
+uint8 status_code
+string status
+string message
+sensor_msgs/JointState joint_solution
+float64 position_error_m
+float64 orientation_error_rad
+float64 solve_time_ms
+float64 validation_time_ms
+float64 jacobian_condition
+float64 min_joint_limit_margin_rad
+bool collision_checked
+bool collision
+string[] collision_pairs

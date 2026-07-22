@@ -30,6 +30,29 @@ arm_ik/status  std_msgs/String (JSON)
 状态包含成功标志、失败原因、位置误差、姿态误差、纯 IK 耗时、校验耗时、
 雅可比条件数和关节限位裕量。失败结果不会覆盖上一条已验证的关节命令。
 
+正式同步 IK 服务：
+
+```text
+arm_ik/solve  elf3_arm_ik_interfaces/srv/SolveArmIK
+```
+
+标准轨迹规划与执行 Action：
+
+```text
+arm_ik/plan_trajectory  elf3_arm_ik_interfaces/action/PlanArmTrajectory
+```
+
+查看完整请求和响应字段：
+
+```bash
+ros2 interface show elf3_arm_ik_interfaces/srv/SolveArmIK
+ros2 interface show elf3_arm_ik_interfaces/action/PlanArmTrajectory
+```
+
+Action 支持只生成 `trajectory_msgs/JointTrajectory` 或直接执行。执行模式支持
+Cancel；取消时优先读取最新实测关节状态，并可自动规划回 `home` 或
+`handshake_ready`。轨迹自动满足请求中的最大速度、最大加速度和控制周期。
+
 `pico/left_grip` 和 `pico/right_grip` 会发布 `1.0`，用于触发现有 `TeleopState` 接管手臂关节。
 
 ## 启动
@@ -84,6 +107,13 @@ python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/benchmark_
 
 ```bash
 python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/ros_ik_smoke_test.py
+```
+
+正式 Service 和 Action 接口测试：
+
+```bash
+python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/ros_solve_service_test.py
+python3 install/elf3_arm_ik_baselink/share/elf3_arm_ik_baselink/tools/ros_trajectory_action_test.py
 ```
 
 2026-07-22 Ubuntu VM 基准结果：连续跟踪 80 个样本，P95 `7.883ms`，
@@ -144,6 +174,10 @@ IK_DELIVERY_TODO.md
 - FK 回算校验位置/姿态误差、关节限位裕量和近奇异状态。
 - 不可达、近奇异、贴近关节限位或非有限输入会被拒绝并保持上一安全命令。
 - 发布真实 IK 耗时和结构化求解状态。
+- 正式 `SolveArmIK` Service，失败时不返回未经验证的关节解。
+- 正式 `PlanArmTrajectory` Action，输出标准 `JointTrajectory`。
+- 轨迹速度、加速度、控制周期约束和执行中 Cancel。
+- Cancel 后从最新实测或估计停止点自动规划回安全位。
 - 输出 `pico_control_joint_commands`，可对接现有手臂命令链。
 - 回零服务 `/arm_ik/go_home`。
 - 握手起手式服务 `/arm_ik/go_handshake_ready`：左臂回零，右臂伸出。
@@ -155,7 +189,8 @@ IK_DELIVERY_TODO.md
 
 - 接入 `withoutarm.onnx` state：身体、腿、腰由模型控制，手臂由本 IK 节点覆盖。
 - 在真实控制链路中确认最终关节命令合并点。
-- 把结构化 IK 状态接入最终自定义 Service / Action 接口和 RViz 面板。
+- 把结构化 IK 状态接入 RViz 面板。
+- 结合碰撞代理体对整条轨迹逐点检查。
 
 ## 当前保护
 

@@ -10,18 +10,35 @@ import time
 from typing import Optional
 
 from ament_index_python.packages import get_package_share_directory
+from elf3_arm_ik_interfaces.action import PlanArmTrajectory
+from elf3_arm_ik_interfaces.srv import SolveArmIK
 import geometry_msgs.msg
 import numpy as np
 import rclpy
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.duration import Duration
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
+from rclpy.task import Future
 import sensor_msgs.msg
 import std_msgs.msg
 import std_srvs.srv
+import trajectory_msgs.msg
 
-from .constants import JOINT_NAMES, LEFT_HOME, RIGHT_HOME, SIDE_LEFT, SIDE_RIGHT
+from .constants import (
+    JOINT_NAMES,
+    LEFT_HOME,
+    LEFT_JOINT_NAMES,
+    RIGHT_HOME,
+    RIGHT_JOINT_NAMES,
+    SIDE_LEFT,
+    SIDE_RIGHT,
+)
 from .ik_solver import Elf3ArmIkSolver, IkResult
 from .math_utils import exponential_smooth, quaternion_xyzw_to_matrix, rate_limit
+from .trajectory_planner import PlannedTrajectory, plan_smoothstep_trajectory
 
 
 @dataclass
@@ -60,6 +77,7 @@ class BaseLinkArmIkNode(Node):
             right_shoulder_origin=self.right_shoulder_origin,
         )
         self._lock = threading.Lock()
+        self._solver_lock = threading.Lock()
         self.targets: dict[str, Optional[TargetPose]] = {
             SIDE_LEFT: None,
             SIDE_RIGHT: None,
@@ -68,10 +86,12 @@ class BaseLinkArmIkNode(Node):
             SIDE_LEFT: None,
             SIDE_RIGHT: None,
         }
+        self.last_joint_state_time = 0.0
         self.last_solutions = {
             SIDE_LEFT: np.asarray(LEFT_HOME, dtype=float),
             SIDE_RIGHT: np.asarray(RIGHT_HOME, dtype=float),
         }
+        self._action_active = False
         self.active_trajectory: Optional[JointTrajectory] = None
         self.last_command_time = time.monotonic()
 
@@ -139,6 +159,20 @@ class BaseLinkArmIkNode(Node):
             self.go_demo_pose_b_service,
             self._go_demo_pose_b_callback,
         )
+        self.create_service(
+            SolveArmIK,
+            self.solve_ik_service,
+            self._solve_ik_callback,
+        )
+        self._trajectory_action = ActionServer(
+            self,
+            PlanArmTrajectory,
+            self.plan_trajectory_action,
+            execute_callback=self._execute_trajectory_action,
+            goal_callback=self._trajectory_goal_callback,
+            cancel_callback=self._trajectory_cancel_callback,
+            callback_group=ReentrantCallbackGroup(),
+        )
         self.timer = self.create_timer(self.publish_period_sec, self._on_timer)
 
     def _declare_parameters(self) -> None:
@@ -155,6 +189,7 @@ class BaseLinkArmIkNode(Node):
         self.declare_parameter('right_enable_topic', 'pico/right_grip')
         self.declare_parameter('publish_period_sec', 0.01)
         self.declare_parameter('target_timeout_sec', 0.5)
+        self.declare_parameter('joint_state_timeout_sec', 0.2)
         self.declare_parameter('smoothing_alpha', 0.35)
         self.declare_parameter('max_joint_step_rad', 0.08)
         self.declare_parameter('solve_orientation', True)
@@ -169,6 +204,11 @@ class BaseLinkArmIkNode(Node):
         self.declare_parameter('max_jacobian_condition', 1000.0)
         self.declare_parameter('min_joint_limit_margin_rad', 0.005)
         self.declare_parameter('ik_status_topic', 'arm_ik/status')
+        self.declare_parameter('solve_ik_service', 'arm_ik/solve')
+        self.declare_parameter('plan_trajectory_action', 'arm_ik/plan_trajectory')
+        self.declare_parameter('trajectory_max_velocity_rad_s', 0.6)
+        self.declare_parameter('trajectory_max_acceleration_rad_s2', 1.2)
+        self.declare_parameter('trajectory_control_period_sec', 0.02)
         self.declare_parameter('publish_enable_grip', True)
         self.declare_parameter('go_home_service', 'arm_ik/go_home')
         self.declare_parameter(
@@ -213,6 +253,9 @@ class BaseLinkArmIkNode(Node):
         self.right_enable_topic = str(self.get_parameter('right_enable_topic').value)
         self.publish_period_sec = self._positive_float('publish_period_sec')
         self.target_timeout_sec = self._positive_float('target_timeout_sec')
+        self.joint_state_timeout_sec = self._positive_float(
+            'joint_state_timeout_sec'
+        )
         self.smoothing_alpha = self._bounded_float('smoothing_alpha', 0.0, 1.0)
         self.max_joint_step_rad = self._positive_float('max_joint_step_rad')
         self.solve_orientation = bool(self.get_parameter('solve_orientation').value)
@@ -239,6 +282,19 @@ class BaseLinkArmIkNode(Node):
             'min_joint_limit_margin_rad'
         )
         self.ik_status_topic = str(self.get_parameter('ik_status_topic').value)
+        self.solve_ik_service = str(self.get_parameter('solve_ik_service').value)
+        self.plan_trajectory_action = str(
+            self.get_parameter('plan_trajectory_action').value
+        )
+        self.trajectory_max_velocity_rad_s = self._positive_float(
+            'trajectory_max_velocity_rad_s'
+        )
+        self.trajectory_max_acceleration_rad_s2 = self._positive_float(
+            'trajectory_max_acceleration_rad_s2'
+        )
+        self.trajectory_control_period_sec = self._positive_float(
+            'trajectory_control_period_sec'
+        )
         self.publish_enable_grip = bool(
             self.get_parameter('publish_enable_grip').value
         )
@@ -350,6 +406,7 @@ class BaseLinkArmIkNode(Node):
         with self._lock:
             self.current_joints[SIDE_LEFT] = np.asarray(msg.position[0:7], dtype=float)
             self.current_joints[SIDE_RIGHT] = np.asarray(msg.position[7:14], dtype=float)
+            self.last_joint_state_time = time.monotonic()
 
     def _on_timer(self) -> None:
         now = time.monotonic()
@@ -388,13 +445,16 @@ class BaseLinkArmIkNode(Node):
                 continue
 
             orientation = target.orientation if self.solve_orientation else None
-            result = self.solver.solve(
-                side=side,
-                tcp_position=target.position,
-                tcp_orientation=orientation,
-                seed_joints=seeds[side] if seeds[side] is not None else previous[side],
-                tcp_offset=self.tcp_offset,
-            )
+            with self._solver_lock:
+                result = self.solver.solve(
+                    side=side,
+                    tcp_position=target.position,
+                    tcp_orientation=orientation,
+                    seed_joints=(
+                        seeds[side] if seeds[side] is not None else previous[side]
+                    ),
+                    tcp_offset=self.tcp_offset,
+                )
             if not result.success:
                 self.get_logger().warn(
                     f'{side} IK rejected [{result.status}]: {result.message}'
@@ -439,6 +499,471 @@ class BaseLinkArmIkNode(Node):
         response.success = True
         response.message = 'started home trajectory'
         return response
+
+    def _solve_ik_callback(
+        self,
+        request: SolveArmIK.Request,
+        response: SolveArmIK.Response,
+    ) -> SolveArmIK.Response:
+        model = request.robot_model.strip()
+        if model and model != 'elf3':
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_UNSUPPORTED_MODEL,
+                'unsupported_model',
+                f'robot model {model!r} is not configured',
+            )
+
+        side = request.arm_side.strip().lower()
+        if side not in (SIDE_LEFT, SIDE_RIGHT):
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_INVALID_REQUEST,
+                'invalid_arm_side',
+                "arm_side must be 'left' or 'right'",
+            )
+
+        frame_id = request.target_pose.header.frame_id.strip()
+        if frame_id and frame_id != self.target_frame:
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_INVALID_FRAME,
+                'invalid_frame',
+                f'expected frame {self.target_frame!r}, received {frame_id!r}',
+            )
+
+        position = np.asarray(
+            [
+                request.target_pose.pose.position.x,
+                request.target_pose.pose.position.y,
+                request.target_pose.pose.position.z,
+            ],
+            dtype=float,
+        )
+        if not np.all(np.isfinite(position)) or not self._is_in_workspace(position):
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_OUTSIDE_WORKSPACE,
+                'outside_workspace',
+                f'target position {position.tolist()} is outside configured workspace',
+            )
+
+        if request.require_collision_check:
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_COLLISION_CHECK_UNAVAILABLE,
+                'collision_check_unavailable',
+                'collision checking is not available in this build',
+            )
+
+        try:
+            seed = self._seed_from_joint_state(side, request.current_joint_state)
+        except ValueError as exc:
+            return self._reject_solve_response(
+                response,
+                SolveArmIK.Response.STATUS_INVALID_REQUEST,
+                'invalid_joint_state',
+                str(exc),
+            )
+
+        orientation = quaternion_xyzw_to_matrix(
+            [
+                request.target_pose.pose.orientation.x,
+                request.target_pose.pose.orientation.y,
+                request.target_pose.pose.orientation.z,
+                request.target_pose.pose.orientation.w,
+            ]
+        )
+        tcp_offset = (
+            np.asarray(
+                [
+                    request.tcp_offset.x,
+                    request.tcp_offset.y,
+                    request.tcp_offset.z,
+                ],
+                dtype=float,
+            )
+            if request.use_tcp_offset
+            else self.tcp_offset
+        )
+        with self._solver_lock:
+            result = self.solver.solve(
+                side=side,
+                tcp_position=position,
+                tcp_orientation=orientation,
+                seed_joints=seed,
+                tcp_offset=tcp_offset,
+                max_position_error_m=request.max_position_error_m,
+                max_orientation_error_rad=request.max_orientation_error_rad,
+                max_jacobian_condition=request.max_jacobian_condition,
+                min_joint_limit_margin_rad=request.min_joint_limit_margin_rad,
+            )
+        self._publish_ik_status(side, result)
+
+        response.success = result.success
+        response.status_code = (
+            SolveArmIK.Response.STATUS_SUCCESS
+            if result.success
+            else SolveArmIK.Response.STATUS_IK_REJECTED
+        )
+        response.status = result.status
+        response.message = result.message or 'IK solution validated'
+        response.position_error_m = result.position_error_m
+        response.orientation_error_rad = result.orientation_error_rad
+        response.solve_time_ms = result.solve_time_ms
+        response.validation_time_ms = result.validation_time_ms
+        response.jacobian_condition = result.jacobian_condition
+        response.min_joint_limit_margin_rad = result.min_joint_limit_margin_rad
+        response.collision_checked = False
+        response.collision = False
+        if result.success:
+            response.joint_solution.header.stamp = self.get_clock().now().to_msg()
+            response.joint_solution.name = self._joint_names(side)
+            response.joint_solution.position = result.joints.astype(float).tolist()
+        return response
+
+    def _seed_from_joint_state(
+        self,
+        side: str,
+        joint_state: sensor_msgs.msg.JointState,
+    ) -> np.ndarray:
+        expected_names = self._joint_names(side)
+        positions = np.asarray(joint_state.position, dtype=float)
+        if len(positions) == 0:
+            with self._lock:
+                current = self.current_joints[side]
+                return (
+                    current.copy()
+                    if current is not None
+                    else self.last_solutions[side].copy()
+                )
+        if not np.all(np.isfinite(positions)):
+            raise ValueError('current_joint_state contains non-finite positions')
+
+        names = list(joint_state.name)
+        if names:
+            if len(names) != len(positions):
+                raise ValueError('joint state name and position lengths differ')
+            by_name = dict(zip(names, positions))
+            missing = [name for name in expected_names if name not in by_name]
+            if missing:
+                raise ValueError(f'missing arm joints: {missing}')
+            return np.asarray([by_name[name] for name in expected_names], dtype=float)
+        if len(positions) == 7:
+            return positions.copy()
+        if len(positions) == 14:
+            return positions[0:7].copy() if side == SIDE_LEFT else positions[7:14].copy()
+        raise ValueError('unnamed joint state must contain 7 or 14 positions')
+
+    @staticmethod
+    def _joint_names(side: str) -> list[str]:
+        return list(LEFT_JOINT_NAMES if side == SIDE_LEFT else RIGHT_JOINT_NAMES)
+
+    @staticmethod
+    def _reject_solve_response(
+        response: SolveArmIK.Response,
+        status_code: int,
+        status: str,
+        message: str,
+    ) -> SolveArmIK.Response:
+        response.success = False
+        response.status_code = status_code
+        response.status = status
+        response.message = message
+        response.collision_checked = False
+        response.collision = False
+        return response
+
+    def _trajectory_goal_callback(
+        self,
+        goal: PlanArmTrajectory.Goal,
+    ) -> GoalResponse:
+        model = goal.robot_model.strip()
+        side = goal.arm_side.strip().lower()
+        safe_mode = goal.safe_return_mode.strip() or 'home'
+        if model and model != 'elf3':
+            return GoalResponse.REJECT
+        if side not in (SIDE_LEFT, SIDE_RIGHT):
+            return GoalResponse.REJECT
+        if goal.minimum_duration_sec < 0.0:
+            return GoalResponse.REJECT
+        if goal.return_to_safe_on_cancel and safe_mode not in (
+            'home',
+            'handshake_ready',
+        ):
+            return GoalResponse.REJECT
+        with self._lock:
+            if self._action_active:
+                return GoalResponse.REJECT
+            self._action_active = True
+        return GoalResponse.ACCEPT
+
+    @staticmethod
+    def _trajectory_cancel_callback(goal_handle) -> CancelResponse:
+        del goal_handle
+        return CancelResponse.ACCEPT
+
+    async def _execute_trajectory_action(self, goal_handle):
+        goal = goal_handle.request
+        result = PlanArmTrajectory.Result()
+        planning_started = time.perf_counter()
+        try:
+            solve_request = SolveArmIK.Request()
+            solve_request.robot_model = goal.robot_model
+            solve_request.arm_side = goal.arm_side
+            solve_request.current_joint_state = goal.current_joint_state
+            solve_request.target_pose = goal.target_pose
+            solve_request.use_tcp_offset = goal.use_tcp_offset
+            solve_request.tcp_offset = goal.tcp_offset
+            solve_request.require_collision_check = goal.require_collision_check
+            solve_response = self._solve_ik_callback(
+                solve_request,
+                SolveArmIK.Response(),
+            )
+            self._copy_solve_result_to_action(solve_response, result)
+            if not solve_response.success:
+                result.planning_time_ms = (
+                    time.perf_counter() - planning_started
+                ) * 1000.0
+                goal_handle.abort()
+                return result
+
+            side = goal.arm_side.strip().lower()
+            start_joints = self._seed_from_joint_state(
+                side,
+                goal.current_joint_state,
+            )
+            goal_joints = np.asarray(
+                solve_response.joint_solution.position,
+                dtype=float,
+            )
+            max_velocity = self._goal_value_or_default(
+                goal.max_velocity_rad_s,
+                self.trajectory_max_velocity_rad_s,
+            )
+            max_acceleration = self._goal_value_or_default(
+                goal.max_acceleration_rad_s2,
+                self.trajectory_max_acceleration_rad_s2,
+            )
+            control_period = self._goal_value_or_default(
+                goal.control_period_sec,
+                self.trajectory_control_period_sec,
+            )
+            planned = plan_smoothstep_trajectory(
+                start=start_joints,
+                goal=goal_joints,
+                max_velocity_rad_s=max_velocity,
+                max_acceleration_rad_s2=max_acceleration,
+                control_period_sec=control_period,
+                minimum_duration_sec=goal.minimum_duration_sec,
+            )
+            result.trajectory = self._to_trajectory_message(
+                side,
+                planned,
+            )
+            result.planning_time_ms = (
+                time.perf_counter() - planning_started
+            ) * 1000.0
+
+            if not goal.execute:
+                result.success = True
+                result.status = 'planned'
+                result.message = 'trajectory generated without execution'
+                goal_handle.succeed()
+                return result
+
+            active = self._start_action_trajectory(
+                side=side,
+                start_joints=start_joints,
+                goal_joints=goal_joints,
+                duration=planned.duration_sec,
+            )
+            execution_started = time.monotonic()
+            while rclpy.ok():
+                now = time.monotonic()
+                elapsed = now - execution_started
+                commands = self._sample_trajectory(active, now)
+                if goal_handle.is_cancel_requested:
+                    stopped = self._stop_action_trajectory(active, commands)
+                    safe_mode = goal.safe_return_mode.strip() or 'home'
+                    if goal.return_to_safe_on_cancel:
+                        self._start_safe_return(stopped, safe_mode)
+                        result.status = 'cancelled_safe_return_started'
+                        result.message = f'cancelled; started {safe_mode} return'
+                    else:
+                        result.status = 'cancelled'
+                        result.message = 'trajectory execution cancelled'
+                    result.success = False
+                    goal_handle.canceled()
+                    return result
+
+                feedback = PlanArmTrajectory.Feedback()
+                feedback.progress = float(
+                    np.clip(elapsed / planned.duration_sec, 0.0, 1.0)
+                )
+                feedback.phase = 'executing'
+                feedback.elapsed_ms = elapsed * 1000.0
+                feedback.current_command.header.stamp = (
+                    self.get_clock().now().to_msg()
+                )
+                feedback.current_command.name = self._joint_names(side)
+                feedback.current_command.position = commands[side].tolist()
+                goal_handle.publish_feedback(feedback)
+
+                if elapsed >= planned.duration_sec:
+                    break
+                await self._async_wait(min(max(control_period, 0.005), 0.1))
+
+            result.success = True
+            result.status = 'completed'
+            result.message = 'trajectory execution completed'
+            goal_handle.succeed()
+            return result
+        except (ValueError, RuntimeError) as exc:
+            result.success = False
+            result.status = 'planning_error'
+            result.message = str(exc)
+            self.get_logger().error(f'trajectory action failed: {exc}')
+            result.planning_time_ms = (
+                time.perf_counter() - planning_started
+            ) * 1000.0
+            goal_handle.abort()
+            return result
+        finally:
+            with self._lock:
+                self._action_active = False
+
+    @staticmethod
+    def _goal_value_or_default(value: float, default: float) -> float:
+        return float(value) if value > 0.0 else float(default)
+
+    async def _async_wait(self, duration_sec: float) -> None:
+        future = Future()
+
+        def wake() -> None:
+            if not future.done():
+                future.set_result(None)
+
+        timer = self.create_timer(float(duration_sec), wake)
+        try:
+            await future
+        finally:
+            self.destroy_timer(timer)
+
+    @staticmethod
+    def _copy_solve_result_to_action(
+        solve: SolveArmIK.Response,
+        result: PlanArmTrajectory.Result,
+    ) -> None:
+        result.success = solve.success
+        result.status = solve.status
+        result.message = solve.message
+        result.position_error_m = solve.position_error_m
+        result.orientation_error_rad = solve.orientation_error_rad
+        result.solve_time_ms = solve.solve_time_ms
+        result.collision_checked = solve.collision_checked
+        result.collision = solve.collision
+        result.collision_pairs = list(solve.collision_pairs)
+
+    def _to_trajectory_message(
+        self,
+        side: str,
+        planned: PlannedTrajectory,
+    ) -> trajectory_msgs.msg.JointTrajectory:
+        message = trajectory_msgs.msg.JointTrajectory()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.joint_names = self._joint_names(side)
+        for index, time_sec in enumerate(planned.times_sec):
+            point = trajectory_msgs.msg.JointTrajectoryPoint()
+            point.positions = planned.positions[index].tolist()
+            point.velocities = planned.velocities[index].tolist()
+            point.accelerations = planned.accelerations[index].tolist()
+            point.time_from_start = Duration(seconds=float(time_sec)).to_msg()
+            message.points.append(point)
+        return message
+
+    def _start_action_trajectory(
+        self,
+        side: str,
+        start_joints: np.ndarray,
+        goal_joints: np.ndarray,
+        duration: float,
+    ) -> JointTrajectory:
+        with self._lock:
+            other_side = SIDE_RIGHT if side == SIDE_LEFT else SIDE_LEFT
+            other = (
+                self.current_joints[other_side].copy()
+                if self.current_joints[other_side] is not None
+                else self.last_solutions[other_side].copy()
+            )
+            active = JointTrajectory(
+                start_left=start_joints.copy() if side == SIDE_LEFT else other,
+                start_right=start_joints.copy() if side == SIDE_RIGHT else other,
+                goal_left=goal_joints.copy() if side == SIDE_LEFT else other,
+                goal_right=goal_joints.copy() if side == SIDE_RIGHT else other,
+                start_time=time.monotonic(),
+                duration=float(duration),
+                name=f'{side}_action',
+            )
+            self.active_trajectory = active
+        return active
+
+    def _stop_action_trajectory(
+        self,
+        active: JointTrajectory,
+        commands: dict[str, np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        with self._lock:
+            use_measured = (
+                time.monotonic() - self.last_joint_state_time
+                <= self.joint_state_timeout_sec
+            )
+            stopped = {
+                side: (
+                    self.current_joints[side].copy()
+                    if use_measured and self.current_joints[side] is not None
+                    else commands[side].copy()
+                )
+                for side in (SIDE_LEFT, SIDE_RIGHT)
+            }
+            if self.active_trajectory is active:
+                self.active_trajectory = None
+            self.last_solutions = {
+                SIDE_LEFT: stopped[SIDE_LEFT].copy(),
+                SIDE_RIGHT: stopped[SIDE_RIGHT].copy(),
+            }
+        return stopped
+
+    def _start_safe_return(
+        self,
+        commands: dict[str, np.ndarray],
+        mode: str,
+    ) -> None:
+        goal_left = np.asarray(LEFT_HOME, dtype=float)
+        goal_right = (
+            self.handshake_right_joints.copy()
+            if mode == 'handshake_ready'
+            else np.asarray(RIGHT_HOME, dtype=float)
+        )
+        start = np.r_[commands[SIDE_LEFT], commands[SIDE_RIGHT]]
+        goal = np.r_[goal_left, goal_right]
+        planned = plan_smoothstep_trajectory(
+            start=start,
+            goal=goal,
+            max_velocity_rad_s=self.trajectory_max_velocity_rad_s,
+            max_acceleration_rad_s2=self.trajectory_max_acceleration_rad_s2,
+            control_period_sec=self.trajectory_control_period_sec,
+        )
+        with self._lock:
+            self.active_trajectory = JointTrajectory(
+                start_left=commands[SIDE_LEFT].copy(),
+                start_right=commands[SIDE_RIGHT].copy(),
+                goal_left=goal_left,
+                goal_right=goal_right,
+                start_time=time.monotonic(),
+                duration=planned.duration_sec,
+                name=f'safe_return_{mode}',
+            )
 
     def _go_handshake_callback(
         self,
@@ -612,11 +1137,17 @@ class BaseLinkArmIkNode(Node):
 def main(args: Optional[list[str]] = None) -> None:
     rclpy.init(args=args)
     node = BaseLinkArmIkNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
+        executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
