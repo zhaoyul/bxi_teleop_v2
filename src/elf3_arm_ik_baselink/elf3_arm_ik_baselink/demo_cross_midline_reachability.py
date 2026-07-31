@@ -22,6 +22,7 @@ from .ik_solver import Elf3ArmIkSolver
 from .math_utils import rotation_matrix_to_quaternion_xyzw
 from .reachability import (
     HANDSHAKE_ORIENTATION,
+    REACHABILITY_X,
     RIGHT_HOME,
     TCP_OFFSET,
     ReachabilitySample,
@@ -248,9 +249,9 @@ class CrossMidlineReachabilityDemo(Node):
     def _region_markers(self) -> list[visualization_msgs.msg.Marker]:
         plane = self._marker(1000, visualization_msgs.msg.Marker.CUBE)
         plane.ns = 'reachability_region'
-        plane.pose.position.x = 0.34
+        plane.pose.position.x = REACHABILITY_X
         plane.pose.position.y = 0.12
-        plane.pose.position.z = 0.08
+        plane.pose.position.z = -0.02
         plane.scale.x = 0.012
         plane.scale.y = 0.25
         plane.scale.z = 0.22
@@ -267,28 +268,28 @@ class CrossMidlineReachabilityDemo(Node):
         centerline.color.b = 1.0
         centerline.color.a = 1.0
         centerline.points = [
-            self._point(0.34, 0.0, -0.02),
-            self._point(0.34, 0.0, 0.19),
+            self._point(REACHABILITY_X, 0.0, -0.11),
+            self._point(REACHABILITY_X, 0.0, 0.09),
         ]
 
         title = self._text_marker(
             1002,
             y=0.34,
-            z=0.21,
+            z=0.11,
             text='RIGHT-ARM->ROBOT-LEFT',
             color=(1.0, 1.0, 1.0),
         )
         reachable_label = self._text_marker(
             1003,
             y=0.34,
-            z=0.17,
+            z=0.07,
             text='GREEN=REACHABLE',
             color=(0.1, 1.0, 0.2),
         )
         rejected_label = self._text_marker(
             1004,
             y=0.34,
-            z=0.13,
+            z=0.03,
             text='RED=REJECTED',
             color=(1.0, 0.12, 0.05),
         )
@@ -298,9 +299,9 @@ class CrossMidlineReachabilityDemo(Node):
             visualization_msgs.msg.Marker.TEXT_VIEW_FACING,
         )
         centerline_label.ns = 'body_centerline'
-        centerline_label.pose.position.x = 0.34
+        centerline_label.pose.position.x = REACHABILITY_X
         centerline_label.pose.position.y = 0.0
-        centerline_label.pose.position.z = 0.205
+        centerline_label.pose.position.z = 0.095
         centerline_label.scale.z = 0.024
         centerline_label.color.r = 0.0
         centerline_label.color.g = 0.9
@@ -412,7 +413,7 @@ class CrossMidlineReachabilityDemo(Node):
             visualization_msgs.msg.Marker.TEXT_VIEW_FACING,
         )
         marker.ns = 'reachability_legend'
-        marker.pose.position.x = 0.34
+        marker.pose.position.x = REACHABILITY_X
         marker.pose.position.y = y
         marker.pose.position.z = z
         marker.scale.z = 0.024

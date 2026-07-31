@@ -27,6 +27,7 @@ REFERENCE_SEEDS = tuple(
     np.asarray(seed, dtype=float) for seed in RIGHT_IK_REFERENCE_SEEDS
 )
 TCP_OFFSET = np.array([0.08, 0.0, 0.0])
+REACHABILITY_X = 0.38
 
 
 @dataclass(frozen=True)
@@ -40,9 +41,9 @@ class ReachabilitySample:
 
 
 def cross_midline_targets(
-    x: float = 0.34,
+    x: float = REACHABILITY_X,
     y_values: Iterable[float] = (0.02, 0.06, 0.10, 0.14, 0.18, 0.22),
-    z_values: Iterable[float] = (0.02, 0.08, 0.14),
+    z_values: Iterable[float] = (-0.08, -0.02, 0.04),
 ) -> list[np.ndarray]:
     """Return body-left sample points; positive Y is the robot's left side."""
     return [
