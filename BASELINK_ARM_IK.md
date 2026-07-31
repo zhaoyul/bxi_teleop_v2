@@ -159,6 +159,40 @@ ros2 run elf3_arm_ik_baselink demo_reset_scenarios --once
 - 大幅任意姿态 B -> 左臂归零、右臂进入握手起手式。
 - 字幕显示当前循环轮次、阶段和服务触发到轨迹启动返回耗时。
 
+### 右臂跨身体中线可达区域
+
+客户评审时可用一个命令启动机器人、IK、RViz 和循环演示：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /opt/bxi/bxi_ros2_pkg/setup.bash
+cd /home/parallels/bxi_arm_v2
+source install/setup.bash
+ros2 launch elf3_arm_ik_baselink cross_midline_reachability_demo.launch.py
+```
+
+演示固定使用右臂和握手方向的 6D TCP 姿态，在机器人身体左侧
+（`base_link` 的 `y > 0`）扫描 18 个候选点。左臂始终保持零位，右臂依次移动到
+每个高度上靠近中线和机器人左侧约 10cm 的稳定点；最远可达边界仍用橙色线完整展示。
+这样可以把极限边界搜索与要求 20ms 的连续实时工作区明确区分。
+
+RViz 标记含义：
+
+- 青色竖线：身体中线 `y = 0`。
+- 绿色点：通过 6D IK、2mm 位置误差、2 度姿态误差、关节限位和奇异性校验。
+- 红色点：当前固定握手姿态下没有通过校验的边界外点。
+- 橙色线：三个采样高度上的最远可达点连接线。
+- 黄色点和箭头：当前执行目标及 TCP 朝向。
+- 蓝色线：演示选取点的运动顺序。
+- 下方字幕：当前目标、运动进度、真实 IK 求解耗时和位置误差。
+
+当前展示的是基于现有 ELF3 URDF、TCP 偏置和固定握手姿态得到的运动学可达边界，
+用于证明右臂能够越过中线到达身体左侧。它不是现场安全认证后的碰撞可达边界；
+碰撞代理体、机器人外壳安全余量和线缆限制仍需在客户设备上标定后叠加。
+
+2026-07-31 Ubuntu VM 最终评审运行中，6 个跨中线稳定工作点的完整 6D IK
+耗时为 `9.16-16.46ms`，均低于 `20ms`，FK 回算位置误差显示为 `0.00mm`。
+
 ## 当前进展
 
 正式交付差距和逐项关闭计划维护在：
@@ -183,6 +217,7 @@ IK_DELIVERY_TODO.md
 - 握手起手式服务 `/arm_ik/go_handshake_ready`：左臂回零，右臂伸出。
 - 大幅演示姿态服务 `/arm_ik/go_demo_pose_a`、`/arm_ik/go_demo_pose_b`。
 - RViz 展示、机器人模型、同步字幕、循环演示和耗时显示。
+- RViz 展示右臂跨中线的 6D 握手姿态可达采样点、运动学边界和逐点动作。
 - 基准 ELF3 模型配置：`src/elf3_arm_ik_baselink/config/models/elf3.yaml`。
 
 待真实联调：

@@ -7,6 +7,7 @@ from elf3_arm_ik_baselink.math_utils import (
     quaternion_xyzw_to_matrix,
     rate_limit,
     rotation_error_rad,
+    rotation_matrix_to_quaternion_xyzw,
     rotation_matrix_to_vector,
 )
 
@@ -59,5 +60,15 @@ def test_rotation_matrix_to_vector():
     np.testing.assert_allclose(
         rotation_matrix_to_vector(rotation),
         [0.0, 0.0, math.pi / 2.0],
+        atol=1e-9,
+    )
+
+
+def test_rotation_matrix_to_quaternion_round_trip():
+    rotation = quaternion_xyzw_to_matrix([0.2, -0.3, 0.1, 0.9])
+    quaternion = rotation_matrix_to_quaternion_xyzw(rotation)
+    np.testing.assert_allclose(
+        quaternion_xyzw_to_matrix(quaternion),
+        rotation,
         atol=1e-9,
     )

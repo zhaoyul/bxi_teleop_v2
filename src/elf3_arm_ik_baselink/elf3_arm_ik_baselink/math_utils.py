@@ -94,3 +94,41 @@ def rotation_matrix_to_vector(matrix: np.ndarray) -> np.ndarray:
         norm = float(np.linalg.norm(axis))
         return angle * axis / norm if norm > 1e-12 else np.zeros(3)
     return angle * skew / (2.0 * sine)
+
+
+def rotation_matrix_to_quaternion_xyzw(matrix: np.ndarray) -> np.ndarray:
+    """Convert a rotation matrix to a normalized XYZW quaternion."""
+    rotation = np.asarray(matrix, dtype=float).reshape(3, 3)
+    trace = float(np.trace(rotation))
+    if trace > 0.0:
+        scale = 2.0 * math.sqrt(trace + 1.0)
+        values = np.array(
+            [
+                (rotation[2, 1] - rotation[1, 2]) / scale,
+                (rotation[0, 2] - rotation[2, 0]) / scale,
+                (rotation[1, 0] - rotation[0, 1]) / scale,
+                0.25 * scale,
+            ]
+        )
+    else:
+        axis = int(np.argmax(np.diag(rotation)))
+        next_axis = (axis + 1) % 3
+        last_axis = (axis + 2) % 3
+        scale = 2.0 * math.sqrt(
+            1.0
+            + rotation[axis, axis]
+            - rotation[next_axis, next_axis]
+            - rotation[last_axis, last_axis]
+        )
+        values = np.zeros(4)
+        values[axis] = 0.25 * scale
+        values[3] = (
+            rotation[last_axis, next_axis] - rotation[next_axis, last_axis]
+        ) / scale
+        values[next_axis] = (
+            rotation[next_axis, axis] + rotation[axis, next_axis]
+        ) / scale
+        values[last_axis] = (
+            rotation[last_axis, axis] + rotation[axis, last_axis]
+        ) / scale
+    return values / np.linalg.norm(values)

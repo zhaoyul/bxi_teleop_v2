@@ -10,6 +10,14 @@ from elf3_arm_ik_baselink.ik_solver import (  # noqa: E402
     STATUS_INVALID_INPUT,
     STATUS_POSITION_ERROR,
 )
+from elf3_arm_ik_baselink.constants import (  # noqa: E402
+    RIGHT_HOME,
+    RIGHT_IK_REFERENCE_SEEDS,
+)
+from elf3_arm_ik_baselink.reachability import (  # noqa: E402
+    HANDSHAKE_ORIENTATION,
+    TCP_OFFSET,
+)
 
 
 @pytest.fixture(scope='module')
@@ -67,3 +75,26 @@ def test_nonfinite_input_is_rejected(solver):
 
     assert not result.success
     assert result.status == STATUS_INVALID_INPUT
+
+
+def test_fallback_seed_recovers_cross_midline_boundary_pose(solver):
+    near = solver.solve(
+        'right',
+        np.array([0.34, 0.06, 0.02]),
+        HANDSHAKE_ORIENTATION,
+        np.asarray(RIGHT_HOME),
+        TCP_OFFSET,
+    )
+    assert near.success
+
+    result = solver.solve_with_seeds(
+        side='right',
+        tcp_position=np.array([0.34, 0.18, 0.02]),
+        tcp_orientation=HANDSHAKE_ORIENTATION,
+        primary_seed=near.joints,
+        fallback_seeds=RIGHT_IK_REFERENCE_SEEDS,
+        tcp_offset=TCP_OFFSET,
+    )
+
+    assert result.success
+    assert result.min_joint_limit_margin_rad >= 0.005

@@ -23,11 +23,16 @@ Visualization Manager:
       Name: Demo Status Text
       Namespaces:
         demo_status: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Topic:
+        Value: /arm_ik/reachability_markers
+      Name: Right Arm Reachability
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: torso_link
-    Frame Rate: 30
+    Frame Rate: 20
   Name: root
   Tools:
     - Class: rviz_default_plugins/Interact

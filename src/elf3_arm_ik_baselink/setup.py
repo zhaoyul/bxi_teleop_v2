@@ -66,6 +66,10 @@ setup(
                 'demo_reset_scenarios = '
                 'elf3_arm_ik_baselink.demo_reset_scenarios:main'
             ),
+            (
+                'demo_cross_midline_reachability = '
+                'elf3_arm_ik_baselink.demo_cross_midline_reachability:main'
+            ),
         ],
     },
 )

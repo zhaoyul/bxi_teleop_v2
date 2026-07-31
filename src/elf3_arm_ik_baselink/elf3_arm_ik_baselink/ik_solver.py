@@ -5,10 +5,10 @@ This module is intentionally ROS-free so it can be unit-tested on macOS.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -235,6 +235,61 @@ class Elf3ArmIkSolver:
             jacobian_condition=jacobian_condition,
             min_joint_limit_margin_rad=min_margin,
             message=message,
+        )
+
+    def solve_with_seeds(
+        self,
+        side: str,
+        tcp_position: np.ndarray,
+        tcp_orientation: Optional[np.ndarray],
+        primary_seed: np.ndarray,
+        fallback_seeds: Iterable[np.ndarray],
+        tcp_offset: np.ndarray,
+        **validation_limits,
+    ) -> IkResult:
+        """Try the current state, then nearby seed branches until one is valid."""
+        started = time.perf_counter()
+        primary_seed = np.asarray(primary_seed, dtype=float).reshape(7)
+        primary = self.solve(
+            side=side,
+            tcp_position=tcp_position,
+            tcp_orientation=tcp_orientation,
+            seed_joints=primary_seed,
+            tcp_offset=tcp_offset,
+            **validation_limits,
+        )
+        if primary.success:
+            return replace(
+                primary,
+                solve_time_ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        tried = [primary_seed]
+        ordered_fallbacks = sorted(
+            (np.asarray(seed, dtype=float).reshape(7) for seed in fallback_seeds),
+            key=lambda seed: float(np.linalg.norm(seed - primary_seed)),
+        )
+        for seed in ordered_fallbacks:
+            if any(np.allclose(seed, previous, atol=1e-8) for previous in tried):
+                continue
+            tried.append(seed)
+            candidate = self.solve(
+                side=side,
+                tcp_position=tcp_position,
+                tcp_orientation=tcp_orientation,
+                seed_joints=seed,
+                tcp_offset=tcp_offset,
+                **validation_limits,
+            )
+            if candidate.success:
+                return replace(
+                    candidate,
+                    solve_time_ms=(time.perf_counter() - started) * 1000.0,
+                )
+
+        return replace(
+            primary,
+            solve_time_ms=(time.perf_counter() - started) * 1000.0,
         )
 
     @staticmethod

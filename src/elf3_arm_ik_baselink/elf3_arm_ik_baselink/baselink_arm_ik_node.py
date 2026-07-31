@@ -32,6 +32,7 @@ from .constants import (
     LEFT_HOME,
     LEFT_JOINT_NAMES,
     RIGHT_HOME,
+    RIGHT_IK_REFERENCE_SEEDS,
     RIGHT_JOINT_NAMES,
     SIDE_LEFT,
     SIDE_RIGHT,
@@ -586,12 +587,21 @@ class BaseLinkArmIkNode(Node):
             if request.use_tcp_offset
             else self.tcp_offset
         )
+        fallback_seeds = [
+            self.last_solutions[side],
+            np.asarray(LEFT_HOME if side == SIDE_LEFT else RIGHT_HOME, dtype=float),
+        ]
+        if side == SIDE_RIGHT:
+            fallback_seeds.extend(
+                np.asarray(item, dtype=float) for item in RIGHT_IK_REFERENCE_SEEDS
+            )
         with self._solver_lock:
-            result = self.solver.solve(
+            result = self.solver.solve_with_seeds(
                 side=side,
                 tcp_position=position,
                 tcp_orientation=orientation,
-                seed_joints=seed,
+                primary_seed=seed,
+                fallback_seeds=fallback_seeds,
                 tcp_offset=tcp_offset,
                 max_position_error_m=request.max_position_error_m,
                 max_orientation_error_rad=request.max_orientation_error_rad,
