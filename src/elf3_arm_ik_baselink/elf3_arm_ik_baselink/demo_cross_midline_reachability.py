@@ -188,7 +188,7 @@ class CrossMidlineReachabilityDemo(Node):
         goal.tcp_offset.z = float(TCP_OFFSET[2])
         goal.max_velocity_rad_s = 0.45 * self.speed_scale
         goal.max_acceleration_rad_s2 = 0.90 * self.speed_scale**2
-        goal.control_period_sec = max(0.02 / self.speed_scale, 0.005)
+        goal.control_period_sec = 0.02
         goal.minimum_duration_sec = self._scaled_duration(1.6)
         goal.require_collision_check = False
         goal.execute = True
