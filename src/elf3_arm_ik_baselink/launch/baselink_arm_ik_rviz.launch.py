@@ -2,8 +2,13 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+)
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -16,6 +21,7 @@ def _patched_robot_description(context):
     config_file = LaunchConfiguration('config_file')
     urdf_dir = LaunchConfiguration('urdf_dir')
     rviz_config = LaunchConfiguration('rviz_config')
+    home_duration_sec = LaunchConfiguration('home_duration_sec')
 
     return [
         Node(
@@ -26,7 +32,13 @@ def _patched_robot_description(context):
             emulate_tty=True,
             parameters=[
                 config_file,
-                {'urdf_dir': urdf_dir},
+                {
+                    'urdf_dir': urdf_dir,
+                    'home_duration_sec': ParameterValue(
+                        home_duration_sec,
+                        value_type=float,
+                    ),
+                },
             ],
         ),
         Node(
@@ -96,6 +108,11 @@ def generate_launch_description():
                 'urdf_file',
                 default_value=default_urdf_file,
                 description='Full ELF3 URDF for RViz robot model.',
+            ),
+            DeclareLaunchArgument(
+                'home_duration_sec',
+                default_value='4.0',
+                description='Duration of the customer demo home motion.',
             ),
             OpaqueFunction(function=_patched_robot_description),
         ]

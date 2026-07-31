@@ -35,8 +35,11 @@ from .reachability import (
 class CrossMidlineReachabilityDemo(Node):
     """Show the right arm reaching several fixed-orientation body-left points."""
 
-    def __init__(self) -> None:
+    def __init__(self, speed_scale: float = 1.0) -> None:
         super().__init__('right_arm_cross_midline_reachability_demo')
+        self.speed_scale = float(speed_scale)
+        if self.speed_scale <= 0.0:
+            raise ValueError('speed_scale must be positive')
         share = Path(get_package_share_directory('elf3_arm_ik_baselink'))
         self.solver = Elf3ArmIkSolver(str(share / 'data'))
         self.marker_pub = self.create_publisher(
@@ -101,7 +104,10 @@ class CrossMidlineReachabilityDemo(Node):
                     self.get_logger().error(
                         f'loop {loop} recovery failed: {recovery_error}'
                     )
-                self.hold_status(f'L{loop}|RECOVERING-TO-HOME', 5.0)
+                self.hold_status(
+                    f'L{loop}|RECOVERING-TO-HOME',
+                    self._scaled_duration(5.0),
+                )
             if once:
                 return
             loop += 1
@@ -109,8 +115,8 @@ class CrossMidlineReachabilityDemo(Node):
     def run_loop(self, loop: int) -> None:
         self.call_home()
         self.hold_status(
-            f'L{loop}|RESET-BOTH-ARMS-HOME',
-            4.5,
+            f'L{loop}|RESET-BOTH-ARMS-HOME|{self.speed_scale:g}X',
+            self._scaled_duration(4.5),
         )
         self.current_right = RIGHT_HOME.copy()
 
@@ -140,14 +146,14 @@ class CrossMidlineReachabilityDemo(Node):
                 f'{self.active_label}|'
                 f'IK={result.solve_time_ms:.1f}ms|'
                 f'E={result.position_error_m * 1000.0:.1f}mm',
-                1.4,
+                self._scaled_duration(1.4),
             )
 
         self.active_sample = None
         self.publish_markers()
         self.hold_status(
             f'L{loop}|CROSS-MIDLINE-DEMO-COMPLETE',
-            1.0,
+            self._scaled_duration(1.0),
         )
 
     def call_home(self) -> None:
@@ -180,10 +186,10 @@ class CrossMidlineReachabilityDemo(Node):
         goal.tcp_offset.x = float(TCP_OFFSET[0])
         goal.tcp_offset.y = float(TCP_OFFSET[1])
         goal.tcp_offset.z = float(TCP_OFFSET[2])
-        goal.max_velocity_rad_s = 0.45
-        goal.max_acceleration_rad_s2 = 0.90
-        goal.control_period_sec = 0.02
-        goal.minimum_duration_sec = 1.6
+        goal.max_velocity_rad_s = 0.45 * self.speed_scale
+        goal.max_acceleration_rad_s2 = 0.90 * self.speed_scale**2
+        goal.control_period_sec = max(0.02 / self.speed_scale, 0.005)
+        goal.minimum_duration_sec = self._scaled_duration(1.6)
         goal.require_collision_check = False
         goal.execute = True
         goal.return_to_safe_on_cancel = True
@@ -219,7 +225,10 @@ class CrossMidlineReachabilityDemo(Node):
             self.publish_status(text)
             self.publish_markers()
             rclpy.spin_once(self, timeout_sec=0.02)
-            time.sleep(0.08)
+            time.sleep(max(0.08 / self.speed_scale, 0.01))
+
+    def _scaled_duration(self, duration_sec: float) -> float:
+        return float(duration_sec) / self.speed_scale
 
     def publish_status(self, text: str) -> None:
         marker = self._marker(0, visualization_msgs.msg.Marker.TEXT_VIEW_FACING)
@@ -440,9 +449,15 @@ def main(args: Optional[list[str]] = None) -> None:
         action='store_true',
         help='Run one reachability sequence and exit.',
     )
+    parser.add_argument(
+        '--speed-scale',
+        type=float,
+        default=1.0,
+        help='Playback speed multiplier for the RViz-only customer demo.',
+    )
     parsed_args, ros_args = parser.parse_known_args(args)
     rclpy.init(args=ros_args)
-    node = CrossMidlineReachabilityDemo()
+    node = CrossMidlineReachabilityDemo(speed_scale=parsed_args.speed_scale)
     try:
         node.run(once=parsed_args.once)
     finally:

@@ -171,6 +171,9 @@ source install/setup.bash
 ros2 launch elf3_arm_ik_baselink cross_midline_reachability_demo.launch.py
 ```
 
+该录屏入口默认使用 `5X` 播放速度：回零约 `0.8s`，单段跨中线动作最低约
+`0.32s`。这是 RViz 评审专用设置，不得直接作为真实机器人速度、加速度参数。
+
 演示固定使用右臂和握手方向的 6D TCP 姿态，在机器人身体左侧
 （`base_link` 的 `y > 0`）扫描 18 个候选点。左臂始终保持零位，右臂依次移动到
 每个高度上靠近中线和机器人左侧约 10cm 的稳定点；最远可达边界仍用橙色线完整展示。

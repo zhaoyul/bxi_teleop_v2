@@ -13,7 +13,8 @@ def generate_launch_description():
             PathJoinSubstitution(
                 [package_share, 'launch', 'baselink_arm_ik_rviz.launch.py']
             )
-        )
+        ),
+        launch_arguments={'home_duration_sec': '0.8'}.items(),
     )
     reachability_demo = TimerAction(
         period=3.0,
@@ -24,6 +25,7 @@ def generate_launch_description():
                 name='demo_cross_midline_reachability',
                 output='screen',
                 emulate_tty=True,
+                arguments=['--speed-scale', '5.0'],
             )
         ],
     )
